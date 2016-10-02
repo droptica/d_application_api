@@ -1,4 +1,8 @@
-Service: Revert(Import) a feature programmatically - Drupal 8
+This is Drupal 8 module for developers
+
+
+Services:
+- Revert(Import) a feature programmatically - Drupal 8
 
 \Drupal::service('d_application_api.features')->import($modules);
 
