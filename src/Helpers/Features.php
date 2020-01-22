@@ -2,33 +2,40 @@
 
 namespace Drupal\d_application_api\Helpers;
 
+use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\features\FeaturesManagerInterface;
-use Drupal\features\ConfigurationItem;
-
 
 class Features {
 
-  private function _drush_features_load_feature($module, $any = FALSE) {
-    /** @var \Drupal\features\FeaturesManagerInterface $manager */
-    $manager = \Drupal::service('features.manager');
-    $feature = $manager->getPackage($module);
-    if ($any && !isset($feature)) {
-      // See if this is a non-features module.
-      $module_handler = \Drupal::moduleHandler();
-      $modules        = $module_handler->getModuleList();
-      if (!empty($modules[$module])) {
-        $extension = $modules[$module];
-        $feature   = $manager->initPackageFromExtension($extension);
-        $config    = $manager->listExtensionConfig($extension);
-        $feature->setConfig($config);
-        $feature->setStatus(FeaturesManagerInterface::STATUS_INSTALLED);
-      }
-    }
-    return $feature;
+  /**
+   * Drupal logger.
+   *
+   * @var \Psr\Log\LoggerInterface
+   */
+  private $logger;
+
+  /**
+   * Features manager.
+   *
+   * @var \Drupal\features\FeaturesManagerInterface
+   */
+  private $manager;
+
+  /**
+   * Features constructor.
+   *
+   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
+   * @param \Drupal\features\FeaturesManagerInterface $manager
+   */
+  public function __construct(LoggerChannelFactoryInterface $logger_factory, FeaturesManagerInterface $manager) {
+    $this->logger = $logger_factory->get('d_application_api');
+    $this->manager = $manager;
   }
 
   /**
    * Copy from file features.drush.inc.
+   *
+   * @param array $args
    */
   public function import($args) {
 
@@ -38,16 +45,11 @@ class Features {
     // from this command.
     $skip_confirmation = TRUE;
 
-    /** @var \Drupal\features\FeaturesManagerInterface $manager */
-    $manager = \Drupal::service('features.manager');
-    /** @var \Drupal\config_update\ConfigRevertInterface $config_revert */
-    $config_revert = \Drupal::service('features.config_update');
-
     // Parse list of arguments.
-    $modules = array();
+    $modules = [];
     foreach ($args as $arg) {
-      $arg       = explode(':', $arg);
-      $module    = array_shift($arg);
+      $arg = explode(':', $arg);
+      $module = array_shift($arg);
       $component = array_shift($arg);
 
       if (isset($module)) {
@@ -58,7 +60,7 @@ class Features {
         }
         elseif ($modules[$module] !== TRUE) {
           if (!isset($modules[$module])) {
-            $modules[$module] = array();
+            $modules[$module] = [];
           }
           $modules[$module][] = $component;
         }
@@ -70,16 +72,14 @@ class Features {
 
       $dt_args['@module'] = $module;
       /** @var \Drupal\features\Package $feature */
-      $feature = $this->_drush_features_load_feature($module, TRUE);
+      $feature = $this->manager->loadPackage($module, TRUE);
       if (empty($feature)) {
-        \Drupal::logger('d_application_api')
-               ->error('No such feature is available: @module', $dt_args);
+        $this->logger->error('No such feature is available: @module', $dt_args);
         return;
       }
 
       if ($feature->getStatus() != FeaturesManagerInterface::STATUS_INSTALLED) {
-        \Drupal::logger('d_application_api')
-               ->error('No such feature is installed: @module', $dt_args);
+        $this->logger->error('No such feature is installed: @module', $dt_args);
         return;
       }
 
@@ -89,8 +89,8 @@ class Features {
       }
       // Only revert components that are detected to be Overridden.
       else {
-        $components = $manager->detectOverrides($feature);
-        $missing    = $manager->reorderMissing($manager->detectMissing($feature));
+        $components = $this->manager->detectOverrides($feature);
+        $missing = $this->manager->reorderMissing($this->manager->detectMissing($feature));
         // Be sure to import missing components first.
         $components = array_merge($missing, $components);
       }
@@ -100,36 +100,35 @@ class Features {
       }
 
       if (empty($components)) {
-        \Drupal::logger('d_application_api')
-               ->notice('Current state already matches active config, aborting.');
+        $this->logger->notice('Current state already matches active config, aborting.');
       }
       else {
-        $config = $manager->getConfigCollection();
+        // Determine which config the user wants to import/revert.
+        $config_to_create = [];
         foreach ($components as $component) {
           $dt_args['@component'] = $component;
           if ($skip_confirmation) {
-            if (!isset($config[$component])) {
-              // Import missing component.
-              /** @var array $item */
-              $item = $manager->getConfigType($component);
-              $type = ConfigurationItem::fromConfigStringToConfigType($item['type']);
-              $config_revert->import($type, $item['name_short']);
-              \Drupal::logger('d_application_api')
-                     ->notice('Import @module : @component.', $dt_args);
-            }
-            else {
-              // Revert existing component.
-              /** @var \Drupal\features\ConfigurationItem $item */
-              $item = $config[$component];
-              $type = ConfigurationItem::fromConfigStringToConfigType($item->getType());
-              $config_revert->revert($type, $item->getShortName());
-              \Drupal::logger('d_application_api')
-                     ->notice('Reverted @module : @component.', $dt_args);
-            }
+            $config_to_create[$component] = '';
+          }
+        }
+
+        // Perform the import/revert.
+        $config_imported = $this->manager->createConfiguration($config_to_create);
+
+        // List the results.
+        foreach ($components as $component) {
+          $dt_args['@component'] = $component;
+          if (isset($config_imported['new'][$component])) {
+            $this->logger->notice('Imported @module : @component.', $dt_args);
+          }
+          elseif (isset($config_imported['updated'][$component])) {
+            $this->logger->notice('Reverted @module : @component.', $dt_args);
+          }
+          elseif (!isset($config_to_create[$component])) {
+            $this->logger->notice('Skipping @module : @component.', $dt_args);
           }
           else {
-            \Drupal::logger('d_application_api')
-                   ->notice('Skipping @module : @component.', $dt_args);
+            $this->logger->notice('Error importing @module : @component.', $dt_args);
           }
         }
       }
