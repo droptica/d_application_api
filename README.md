@@ -1,15 +1,17 @@
-This is Drupal 8 module for developers
+# This is Drupal 8 module for developers
 
+## Installation:
 
-Services:
-- Revert(Import) a feature programmatically - Drupal 8
+`composer require droptica/d_application_api`
 
-\Drupal::service('d_application_api.features')->import($modules);
+## Services:
+### Revert (Import) a feature programmatically - Drupal 8
 
+`\Drupal::service('d_application_api.features')->import($modules);`
 
-Example usage:
+#### Example usage:
 
-```
+```php
 <?php
 
 /**

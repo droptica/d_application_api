@@ -1,6 +1,6 @@
 name: Application API module
 description: Helper classess and methods
 type: module
-core: 8.x
+core_version_requirement: ^8 || ^9
 package: Droptica
-version: '8.x-1.0-beta1'
+version: '8.x-1.1'
